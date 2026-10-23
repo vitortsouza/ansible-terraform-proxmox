@@ -1,0 +1,32 @@
+---
+- name: Remover snapshots automáticos das VMs PROD
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../inventory/group_vars/prod.yml
+
+  vars:
+    snapshot_name_prefix: "^pre-(sec|full)-update-"
+
+  tasks:
+    - name: Validar token da API do Proxmox
+      ansible.builtin.assert:
+        that:
+          - proxmox_api_token_secret | length > 0
+        fail_msg: "Defina a variável de ambiente PROXMOX_API_TOKEN_SECRET antes de executar este playbook."
+        quiet: true
+
+    - name: Obter recursos do cluster
+      ansible.builtin.uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/cluster/resources?type=vm"
+        method: GET
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        headers:
+          Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+      register: cluster_resources
+
+    - name: Processar cada VM da lista
+      ansible.builtin.include_tasks: tasks/remove_snapshot_vm.yml
+      loop: "{{ snapshots_targets }}"
+      loop_control:
+        loop_var: vm

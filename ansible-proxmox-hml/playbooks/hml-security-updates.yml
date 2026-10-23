@@ -1,0 +1,131 @@
+---
+- name: Aplicar atualizações de segurança em VMs HML com snapshot prévio
+  hosts: hml
+  become: true
+  gather_facts: true
+  serial: 1
+
+  tasks:
+    - name: Validar token da API do Proxmox
+      ansible.builtin.assert:
+        that:
+          - proxmox_api_token_secret | length > 0
+        fail_msg: "Defina a variável de ambiente PROXMOX_API_TOKEN_SECRET antes de executar este playbook."
+        quiet: true
+
+    - name: Definir nome do snapshot
+      ansible.builtin.set_fact:
+        snapshot_name: "pre-sec-update-{{ ansible_date_time.iso8601_basic_short }}"
+
+    - name: Criar snapshot da VM no Proxmox antes do update
+      community.proxmox.proxmox_snap:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        vmid: "{{ hml_vms[inventory_hostname].proxmox_vmid }}"
+        state: present
+        snapname: "{{ snapshot_name }}"
+        description: "{{ proxmox_snapshot_desc }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+      delegate_to: localhost
+      register: snapshot_result
+
+    - name: Abortar se o snapshot falhar
+      ansible.builtin.assert:
+        that:
+          - snapshot_result is succeeded
+        fail_msg: "Falha ao criar snapshot da VM {{ inventory_hostname }}. Update abortado por segurança."
+        success_msg: "Snapshot criado com sucesso para {{ inventory_hostname }}."
+
+    - name: Atualizar cache do apt
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Listar pacotes com update de segurança disponível no Debian/Ubuntu
+      ansible.builtin.shell: |
+        apt-get -s dist-upgrade | grep "^Inst" | grep -i security | awk '{print $2}'
+      register: security_packages_debian
+      changed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: Mostrar pacotes de segurança encontrados no Debian/Ubuntu
+      ansible.builtin.debug:
+        msg: "Pacotes de segurança pendentes: {{ security_packages_debian.stdout_lines }}"
+      when: ansible_os_family == "Debian"
+
+    - name: Aplicar atualizações de segurança no Debian/Ubuntu
+      ansible.builtin.apt:
+        name: "{{ security_packages_debian.stdout_lines }}"
+        state: latest
+        only_upgrade: true
+      when:
+        - ansible_os_family == "Debian"
+        - security_packages_debian.stdout_lines | length > 0
+      register: apt_result
+
+    - name: Nenhuma atualização de segurança pendente no Debian/Ubuntu
+      ansible.builtin.debug:
+        msg: "Nenhuma atualização de segurança pendente para {{ inventory_hostname }}."
+      when:
+        - ansible_os_family == "Debian"
+        - security_packages_debian.stdout_lines | length == 0
+
+    - name: Atualizar cache do DNF
+      ansible.builtin.dnf:
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+
+    - name: Aplicar atualizações de segurança no RHEL-like
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_only: true
+        security: true
+      when: ansible_os_family == "RedHat"
+      register: dnf_result
+
+    - name: Mostrar resultado das atualizações no RHEL-like
+      ansible.builtin.debug:
+        var: dnf_result
+      when: ansible_os_family == "RedHat"
+
+    - name: Verificar se sistema Debian/Ubuntu pede reboot
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file_debian
+      when: ansible_os_family == "Debian"
+
+    - name: Verificar se sistema RHEL-like pede reboot
+      ansible.builtin.command: needs-restarting -r
+      register: reboot_required_cmd_redhat
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Definir status final de reboot
+      ansible.builtin.set_fact:
+        reboot_required: >-
+          {{
+            (ansible_os_family == "Debian" and reboot_required_file_debian.stat.exists)
+            or
+            (ansible_os_family == "RedHat" and reboot_required_cmd_redhat.rc != 0)
+          }}
+
+    - name: Avisar que reboot é necessário, mas não será feito
+      ansible.builtin.debug:
+        msg: >-
+          ATENÇÃO: {{ inventory_hostname }} indica reboot necessário,
+          mas o reboot NÃO será executado por este playbook.
+      when: reboot_required
+
+    - name: Resumo da execução
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "SO: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "VMID: {{ hml_vms[inventory_hostname].proxmox_vmid }}"
+          - "Snapshot: {{ snapshot_name }}"
+          - "Reboot necessário: {{ reboot_required }}"

@@ -1,0 +1,6 @@
+# Copie para terraform.tfvars e ajuste ao seu ambiente.
+# O arquivo terraform.tfvars está no .gitignore.
+pm_api_url  = "https://pve-node01.example.com:8006/"
+target_node = "pve-node01"
+vm_name     = "vm-example"
+vmid        = 9100

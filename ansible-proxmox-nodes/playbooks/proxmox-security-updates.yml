@@ -1,0 +1,79 @@
+---
+- name: Aplicar atualizações de segurança em nodes Proxmox
+  hosts: proxmox_nodes
+  serial: "{{ serial_batch | default(1) }}"
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Garantir que o host é Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: "Este playbook foi feito para nodes Proxmox baseados em Debian."
+        success_msg: "Host {{ inventory_hostname }} é Debian, seguindo com o patching."
+
+    - name: Atualizar cache do apt
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: "{{ apt_cache_valid_time | default(3600) }}"
+
+    - name: Listar pacotes com update de segurança disponível
+      ansible.builtin.shell: |
+        apt-get -s dist-upgrade | grep '^Inst' | grep -i security | awk '{print $2}'
+      args:
+        executable: /bin/bash
+      register: security_packages_debian
+      changed_when: false
+
+    - name: Mostrar pacotes de segurança encontrados
+      ansible.builtin.debug:
+        msg: "{{ security_packages_debian.stdout_lines }}"
+      when: security_packages_debian.stdout_lines | length > 0
+
+    - name: Informar ausência de updates de segurança
+      ansible.builtin.debug:
+        msg: "Nenhuma atualização de segurança pendente para {{ inventory_hostname }}."
+      when: security_packages_debian.stdout_lines | length == 0
+
+    - name: Aplicar atualizações de segurança no Debian/Proxmox
+      ansible.builtin.apt:
+        name: "{{ security_packages_debian.stdout_lines }}"
+        state: latest
+      register: security_upgrade_result
+      when: security_packages_debian.stdout_lines | length > 0
+
+    - name: Verificar se o sistema pede reboot
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Definir status final de reboot
+      ansible.builtin.set_fact:
+        reboot_required: "{{ reboot_required_file.stat.exists | default(false) }}"
+
+    - name: Avisar que reboot é necessário, mas não será feito
+      ansible.builtin.debug:
+        msg: "Reboot necessário em {{ inventory_hostname }}, mas perform_reboot=false."
+      when:
+        - reboot_required
+        - not (perform_reboot | default(false))
+
+    - name: Reiniciar node se permitido
+      ansible.builtin.reboot:
+        msg: "Reboot automático após updates de segurança via Ansible"
+        reboot_timeout: 1800
+        connect_timeout: 20
+        pre_reboot_delay: 5
+        post_reboot_delay: 20
+      when:
+        - reboot_required
+        - perform_reboot | default(false)
+
+    - name: Resumo da execução
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "SO: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Security updates encontrados: {{ security_packages_debian.stdout_lines | length }}"
+          - "Reboot necessário: {{ reboot_required }}"

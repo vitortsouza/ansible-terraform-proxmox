@@ -1,0 +1,119 @@
+---
+- name: Criar snapshot e aplicar updates completos no Windows Server
+  hosts: windows_vms
+  gather_facts: false
+  serial: 1
+
+  vars:
+    snapshot_registry_dir: "{{ playbook_dir }}/../snapshots-created"
+
+  tasks:
+    - name: Validar variáveis obrigatórias
+      ansible.builtin.assert:
+        that:
+          - vmid is defined
+          - proxmox_node is defined
+          - proxmox_api_host is defined
+          - proxmox_api_user is defined
+          - proxmox_api_token_id is defined
+          - proxmox_api_token_secret is defined
+          - proxmox_api_token_secret | length > 0
+        fail_msg: >-
+          Faltam variáveis obrigatórias para {{ inventory_hostname }}.
+          Verifique o inventário e a variável de ambiente PROXMOX_API_TOKEN_SECRET.
+        success_msg: "Variáveis obrigatórias OK para {{ inventory_hostname }}."
+
+    - name: Gerar timestamp único para o snapshot
+      ansible.builtin.set_fact:
+        snapshot_timestamp: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+
+    - name: Gerar nome curto do snapshot
+      ansible.builtin.set_fact:
+        snapshot_name: "wsfull-{{ vmid }}-{{ snapshot_timestamp }}"
+
+    - name: Mostrar variáveis principais
+      ansible.builtin.debug:
+        msg:
+          - "proxmox_api_host={{ proxmox_api_host }}"
+          - "proxmox_node={{ proxmox_node }}"
+          - "vmid={{ vmid }}"
+          - "snapshot_name={{ snapshot_name }}"
+
+    - name: Garantir diretório local para registrar snapshots criados
+      ansible.builtin.file:
+        path: "{{ snapshot_registry_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Criar snapshot da VM no Proxmox antes dos updates
+      community.proxmox.proxmox_snap:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        vmid: "{{ vmid }}"
+        snapname: "{{ snapshot_name }}"
+        description: "{{ snapshot_description | default('Snapshot automático antes de updates completos do Windows Server') }}"
+        state: present
+        retention: "{{ snapshot_retention | default(0) }}"
+      delegate_to: localhost
+      register: snapshot_result
+
+    - name: Abortar se o snapshot falhar
+      ansible.builtin.assert:
+        that:
+          - snapshot_result is succeeded
+        fail_msg: "Falha ao criar snapshot da VM {{ inventory_hostname }}. Update abortado por segurança."
+        success_msg: "Snapshot criado com sucesso para {{ inventory_hostname }}."
+
+    - name: Registrar nome exato do snapshot criado
+      ansible.builtin.copy:
+        dest: "{{ snapshot_registry_dir }}/{{ inventory_hostname }}.snapshot"
+        content: "{{ snapshot_name }}\n"
+        mode: "0644"
+      delegate_to: localhost
+
+    - name: Mostrar variáveis de updates
+      ansible.builtin.debug:
+        var: hostvars[inventory_hostname]
+
+    - name: Aplicar updates do Windows
+      ansible.windows.win_updates:
+        category_names: "{{ windows_update_categories }}"
+        server_selection: "{{ server_selection }}"
+        reboot: false
+      register: win_updates_result
+
+    - name: Verificar se winget está disponível
+      ansible.windows.win_shell: winget --version
+      register: winget_check
+      changed_when: false
+      failed_when: false
+
+    - name: Atualizar apps de terceiros com winget
+      ansible.windows.win_shell: >
+        winget upgrade --all --silent --accept-source-agreements --accept-package-agreements
+      register: winget_result
+      changed_when: winget_result.rc == 0
+      failed_when: winget_result.rc not in [0, 1]
+      when: winget_check.rc == 0
+
+    - name: Exibir resumo dos updates
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ inventory_hostname }}"
+          - "VMID: {{ vmid }}"
+          - "Snapshot criado: {{ snapshot_name }}"
+          - "Windows updates encontrados: {{ win_updates_result.found_update_count | default(0) }}"
+          - "Windows updates instalados: {{ win_updates_result.installed_update_count | default(0) }}"
+          - "Windows falhas: {{ win_updates_result.failed_update_count | default(0) }}"
+          - "Winget rc: {{ winget_result.rc | default('n/a') }}"
+          - "Reboot necessário: {{ win_updates_result.reboot_required | default(false) }}"
+
+    - name: Reiniciar se necessário
+      ansible.windows.win_reboot:
+        reboot_timeout: 3600
+        post_reboot_delay: 30
+      when: win_updates_result.reboot_required | default(false)

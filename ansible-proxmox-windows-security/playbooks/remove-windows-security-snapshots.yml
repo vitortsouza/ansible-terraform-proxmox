@@ -1,0 +1,66 @@
+---
+- name: Remover apenas snapshots criados pelos playbooks do Windows
+  hosts: windows_vms
+  gather_facts: false
+  serial: 1
+
+  vars:
+    snapshot_registry_dir: "{{ playbook_dir }}/../snapshots-created"
+    snapshot_registry_file: "{{ snapshot_registry_dir }}/{{ inventory_hostname }}.snapshot"
+
+  tasks:
+    - name: Verificar se existe registro local do snapshot
+      ansible.builtin.stat:
+        path: "{{ snapshot_registry_file }}"
+      delegate_to: localhost
+      register: snapshot_file_stat
+
+    - name: Informar ausência de snapshot registrado
+      ansible.builtin.debug:
+        msg: "Nenhum snapshot registrado pelo playbook principal para {{ inventory_hostname }}."
+      when: not snapshot_file_stat.stat.exists
+
+    - name: Ler nome do snapshot registrado
+      ansible.builtin.slurp:
+        src: "{{ snapshot_registry_file }}"
+      delegate_to: localhost
+      register: snapshot_file_content
+      when: snapshot_file_stat.stat.exists
+
+    - name: Definir nome do snapshot a remover
+      ansible.builtin.set_fact:
+        snapshot_name_to_remove: "{{ snapshot_file_content.content | b64decode | trim }}"
+      when: snapshot_file_stat.stat.exists
+
+    - name: Remover snapshot criado pelo playbook principal
+      community.proxmox.proxmox_snap:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs | default(false) }}"
+        vmid: "{{ vmid }}"
+        snapname: "{{ snapshot_name_to_remove }}"
+        state: absent
+      delegate_to: localhost
+      register: remove_snapshot_result
+      failed_when: false
+      when: snapshot_file_stat.stat.exists
+
+    - name: Apagar registro local somente se o snapshot foi removido
+      ansible.builtin.file:
+        path: "{{ snapshot_registry_file }}"
+        state: absent
+      delegate_to: localhost
+      when:
+        - snapshot_file_stat.stat.exists
+        - remove_snapshot_result is defined
+        - remove_snapshot_result.changed | default(false)
+
+    - name: Exibir resumo da remoção
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ inventory_hostname }}"
+          - "Snapshot solicitado: {{ snapshot_name_to_remove | default('nenhum') }}"
+          - "Resultado Proxmox: {{ remove_snapshot_result.msg | default('sem retorno') }}"
+      when: snapshot_file_stat.stat.exists

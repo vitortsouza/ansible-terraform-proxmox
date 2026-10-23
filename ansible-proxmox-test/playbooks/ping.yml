@@ -1,0 +1,7 @@
+---
+- name: Testar conectividade com as VMs de teste
+  hosts: test_vms
+  gather_facts: false
+  tasks:
+    - name: Executar ping via SSH
+      ansible.builtin.ping:

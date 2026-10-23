@@ -1,0 +1,41 @@
+---
+# Conexão com a API do Proxmox.
+# O segredo do token NÃO deve ser versionado: defina a variável de ambiente
+# PROXMOX_API_TOKEN_SECRET antes de executar os playbooks.
+proxmox_api_host: "pve-node01.example.com"
+proxmox_api_user: "ansible@pve"
+proxmox_api_token_id: "ansible"
+proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+proxmox_validate_certs: false
+
+proxmox_snapshot_desc: "Snapshot automático antes de updates via Ansible (HML)"
+
+# Mapeamento entre o host do inventário e o VMID no Proxmox.
+hml_vms:
+  vm-app01:
+    proxmox_vmid: 101
+  vm-monitor01:
+    proxmox_vmid: 102
+  vm-docs01:
+    proxmox_vmid: 103
+  vm-manager01:
+    proxmox_vmid: 104
+  vm-metrics01:
+    proxmox_vmid: 105
+  vm-tools01:
+    proxmox_vmid: 106
+
+# Alvos usados pelo playbook de limpeza de snapshots.
+snapshots_targets:
+  - name: vm-app01
+    proxmox_vmid: 101
+  - name: vm-monitor01
+    proxmox_vmid: 102
+  - name: vm-docs01
+    proxmox_vmid: 103
+  - name: vm-manager01
+    proxmox_vmid: 104
+  - name: vm-metrics01
+    proxmox_vmid: 105
+  - name: vm-tools01
+    proxmox_vmid: 106

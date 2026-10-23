@@ -1,0 +1,29 @@
+# Credenciais e chaves
+.ssh/
+*.pem
+*.key
+vault*.yml
+*.vault
+ansible-proxmox-test/inventory/pve.proxmox.yml
+
+# Estado local do Ansible
+.ansible/
+*.retry
+*.log
+
+# Snapshots registrados localmente
+snapshots-created/*.snapshot
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+terraform.tfvars
+*.tfvars
+
+# Documentação interna e arquivos de sistema
+*.docx
+desktop.ini
+.DS_Store
+Thumbs.db

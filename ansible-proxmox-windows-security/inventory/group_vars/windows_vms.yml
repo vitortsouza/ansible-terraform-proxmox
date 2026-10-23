@@ -1,0 +1,18 @@
+---
+# Conexão com a API do Proxmox.
+# O segredo do token NÃO deve ser versionado: defina a variável de ambiente
+# PROXMOX_API_TOKEN_SECRET antes de executar os playbooks.
+proxmox_api_host: "pve-node01.example.com"
+proxmox_api_user: "ansible@pve"
+proxmox_api_token_id: "ansible"
+proxmox_api_token_secret: "{{ lookup('env', 'PROXMOX_API_TOKEN_SECRET') }}"
+proxmox_validate_certs: false
+
+snapshot_prefix: pre-winsec-update
+snapshot_description: "Snapshot automático antes de updates de segurança do Windows Server"
+snapshot_retention: 5
+
+windows_update_categories:
+  - SecurityUpdates
+
+server_selection: managed_server
